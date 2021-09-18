@@ -147,7 +147,7 @@ ECL_per = round(np.nansum(ECL_tmp[0]) / np.nansum(exp_df[-1]), 2)
 final_df = pd.DataFrame([exp_df[-1],TTC_PD, ECL_tmp[2]], index = ['Final Exposure', 'TTC PD', 'Asset Correlation']).T
 final_df = pd.concat([final_df, ECL_PD, ECL_final], axis = 1)
 final_df = final_df.set_index(data.columns[1:])
-print(final_df)
+# print(final_df)
 
 
 # %%
@@ -160,4 +160,4 @@ print(final_df)
 final_df_PD = final_df.drop(['Final Exposure', 'Asset Correlation', 'Final ECL'], axis = 1)
 final_df_PD = final_df_PD.drop(index = ['> 360 days']) 
 final_df_PD.plot()
-#plt.show()
+plt.show()
