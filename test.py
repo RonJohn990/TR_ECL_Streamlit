@@ -8,15 +8,19 @@ import matplotlib.pyplot as plt
 st.title("Simplified Approach for ECL Estimation")
 
 # Loading Data
-data_load_state = st.text('Loading Provision Matrix')
+# data_load_state = st.text('Loading Provision Matrix')
 data = pd.read_csv("./data/test_data.csv")
-data_load_state = st.text('Finished Loading Data')
+# data_load_state = st.text('Finished Loading Data')
 
+data_up = st.sidebar.file_uploader("Choose a file")
+if data_up is not None:
+  df = pd.read_csv(data_up)
+  #st.write(df)
 
 
 # Inspecting the Data #########################################
 st.subheader("Exposure Data")
-st.write(data)
+st.write(df)
 
 # GDP Percentage Data
 # # Preprocessing macro data and calculating Z-scores
@@ -54,11 +58,12 @@ def macro_preprocess(macro_data):
     return (macro)
 
 GDP = macro_preprocess(GDP_data)
-col = GDP_data[0]
-GDP = GDP[col]
-GDP.to_csv("./data/gdp.csv")
+col = GDP_data[0] # Columns Names
+GDP = GDP[col] # Ading in the Year Column to the dataframe
+GDP[::-1].to_csv("./data/gdp.csv")
 gdp_data = pd.read_csv("./data/gdp.csv", header = [0], index_col=[0])
 st.dataframe(gdp_data)
+
 
 
 # Z- scores ########################################################
@@ -89,6 +94,7 @@ Z_scores.to_csv("./data/z_scores.csv")
 z_scores = pd.read_csv("./data/z_scores.csv", header = [0])
 
 st.write(z_scores)
+
 
 
 # TTC PD, PiT PD & Asset Correlation###########################################
@@ -135,3 +141,93 @@ def PiT_PD(ttc_pd, z_scores, country, yr):
     down_pit = norm.cdf((p - np.multiply(np.sqrt(rho), m_down) / np.sqrt( 1 - rho)), loc = 0, scale = 1)
     pit_pd = pd.DataFrame([base_pit, up_pit, down_pit], index = ["Base", "Upturn", "Downturn"])
     return(pit_pd.T, rho)   
+
+
+# LGD Calculation ###########################################################
+a = exp_df[0:-1, -1]
+b = exp_df[0:-1, -2]
+c = exp_df[1:, -1]
+
+LGD = pd.DataFrame((a + b - c)/(a + b))
+LGD = LGD.where(cond = LGD < 1, other = 1)
+LGD = LGD.where(cond = LGD > 0, other = np.nan)
+LGD = np.nanmean(LGD)
+
+
+# ECL Calculation ###########################################################
+@st.cache
+def ECL(exp, LGD, ttc_pd, z_scores, country, yr, w1 = 0.33, w2 = 0.33, w3 = 0.33 ):
+    PD = PiT_PD(ttc_pd, z_scores, country, yr)
+    final_exp = np.round(exp[-1], 2)
+    tmp_1 = (PD[0].to_numpy() * LGD) # PD * LGD
+    ECL_scenarios = np.round(np.einsum("ij, i -> ij", tmp_1, final_exp), 2)
+    ECL_final = np.average(ECL_scenarios, weights = [w1, w2, w3], axis = 1)
+    return(ECL_final, PD[0], PD[1])
+
+
+# Requiredd arguments are
+# exp, LGD, w1, w2, w3, ttc_pd, z_scores, country, yr
+# 'Afghanistan', 'Bahrain', 'Canada', 'Egypt', 'India', 'Oman',
+#       'Qatar', 'Saudi Arabia', 'United Arab Emirates', 'United Kingdom',
+#       'United States'
+
+# Year Select Box in Sidebar
+year_selecttbox = st.sidebar.selectbox(
+    "Year",
+    reversed((gdp_data['Year']))
+)
+
+# Country Select Box in Sidebar
+country_selectbox = st.sidebar.selectbox(
+    "Economy",
+    (col[1:])
+)
+
+st.sidebar.subheader("Weights")
+w1 = st.sidebar.slider(label = 'Base Weight', value = 50)
+w2 = st.sidebar.slider(label = 'Best Weight', value = 20)
+w3 = st.sidebar.slider(label = 'Worst Weight', value = 100 - w1 - w2)
+colw1, colw2, colw3 = st.columns(3)
+
+
+ECL_tmp = ECL(exp_df, LGD, TTC_PD, Z_scores, country_selectbox, year_selecttbox, w1, w2, w3)
+ECL_final = round(pd.DataFrame(ECL_tmp[0], columns = ['Final ECL']), 2)
+ECL_PD = ECL_tmp[1] 
+
+ECL_per = round(np.nansum(ECL_tmp[0]) / np.nansum(exp_df[-1]), 2)
+
+final_df = pd.DataFrame([exp_df[-1],TTC_PD, ECL_tmp[2]], index = ['Final Exposure', 'TTC PD', 'Asset Correlation']).T
+final_df = pd.concat([final_df, ECL_PD, ECL_final], axis = 1)
+final_df = final_df.set_index(data.columns[1:])
+
+st.subheader('ECL For chosen Economy')
+st.write(final_df)
+
+
+# Summary Table for Results #######################################################
+final_ecl = round(np.sum(final_df['Final ECL']), 2)
+final_exp = round(np.sum(final_df['Final Exposure']), 2)
+tmp_array = np.array([final_exp, final_ecl, ECL_per])
+
+ECL_summary = pd.Series(tmp_array,
+                            index = ['Final Exposure', 'Final ECL', 'ECL(%)'],
+                            name = 'Result')
+st.sidebar.subheader('ECL Summary')
+#col1, col2, col3 = st.columns(3)
+
+st.sidebar.metric("Final Exposure", ECL_summary[0])
+
+st.sidebar.metric("Final ECL", ECL_summary[1])
+
+st.sidebar.metric("ECL(%)", ECL_summary[2])
+#st.dataframe(ECL_summary)
+
+
+
+# Plotting (bcos I felt lkke it) ################################################
+final_df_PD = final_df.drop(['Final Exposure', 'Asset Correlation', 'Final ECL'], axis = 1)
+final_df_PD = (final_df_PD.drop(index = ['> 360 days']))
+final_df_PD = final_df_PD.reset_index(drop = True)
+
+st.subheader("PD Plots")
+st.line_chart(final_df_PD)
